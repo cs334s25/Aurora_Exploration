@@ -1,7 +1,13 @@
+import concurrent.futures
+import threading
 import boto3
 import json
+import time
 import psycopg
 from psycopg.errors import Error
+
+# Lock for database connection to ensure thread safety
+db_lock = threading.Lock()
 
 def create_comments_table(conn):
     try:
@@ -104,52 +110,74 @@ def batch_insert_records(records, conn):
     """
     values = [tuple(record.values()) for record in records]
     try:
-        with conn.cursor() as cur:
-            cur.executemany(query, values)
-        conn.commit()
-        print(f"Inserted {len(records)} records successfully.")
+        with db_lock:  # Locking for thread safety
+            with conn.cursor() as cur:
+                cur.executemany(query, values)
+            conn.commit()
+            print(f"Inserted {len(records)} records successfully.")
     except Error as e:
         print(f"Error inserting records: {e}")
         conn.rollback()
 
-def ingest_comments(bucket_name, prefix, conn):
-    session = boto3.Session()
-    s3 = session.resource('s3')
-    bucket = s3.Bucket(bucket_name)
+def process_files(keys_batch, conn_params, bucket_name):
+    try:
+        s3 = boto3.resource('s3', region_name='us-east-1')
+        bucket = s3.Bucket(bucket_name)
+        conn = psycopg.connect(**conn_params)
+        records = []
 
-    batch_size = 100  # Batch size for inserts
-    batch = []
-
-    for obj in bucket.objects.filter(Prefix=prefix):
-        key = obj.key
-        
-        if key.endswith('.json'):
+        for key in keys_batch:
             try:
-                parts = key.split('/')
-                if 'comments' in parts:
-                    print(key)
-                    json_obj = obj.get()["Body"].read().decode('utf-8')
-                    batch.append(parse_json_to_record(json_obj))
-
-                # Insert in batches
-                if len(batch) >= batch_size:
-                    batch_insert_records(batch, conn)
-                    batch.clear()
+                obj = bucket.Object(key)
+                json_obj = obj.get()["Body"].read().decode('utf-8')
+                record = parse_json_to_record(json_obj)
+                records.append(record)
             except Exception as e:
                 print(f"Error processing file {key}: {e}")
-    
-    # Insert any remaining records
-    if batch:
-        batch_insert_records(batch, conn)
+
+        # Batch insert records into the database
+        batch_insert_records(records, conn)
+        print('first record:', records[0]['id'])
+    finally:
+        if conn:
+            conn.close()
+
+
+def ingest_comments(bucket_name, prefix, conn_params, max_workers):
+    s3 = boto3.client('s3', region_name='us-east-1')
+
+    # Generator to yield batches of file keys
+    def generate_batches():
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+            if 'Contents' in page:
+                batch = []
+                for obj in page['Contents']:
+                    if obj['Key'].endswith('.json'):
+                        parts = obj['Key'].split('/')
+                        if 'comments' in parts:
+                            batch.append(obj['Key'])
+                            if len(batch) == 1000:
+                                yield batch
+                                batch = []
+                if batch:
+                    yield batch
+
+    # Process batches in threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for batch in generate_batches():
+            futures.append(executor.submit(process_files, batch, conn_params, bucket_name))
+        concurrent.futures.wait(futures)
         
-
+        
 def main():
-    s3 = boto3.resource('s3')
-
     bucket_name = 'mirrulations'
-    prefix = 'WHD/WHD-2023-0001/'
+    #prefix = 'WHD/WHD-2023-0001/'
+    #prefix = 'WHD/WHD-2019-0003/'
+    prefix = 'WHD/'
 
-    client = boto3.client('secretsmanager')
+    client = boto3.client('secretsmanager', region_name='us-east-1')
     secret_name = "rds!cluster-60fb6e4d-4475-4da5-8fe1-945933b30166"
     response = client.get_secret_value(SecretId=secret_name)
     secret = json.loads(response['SecretString'])
@@ -169,10 +197,15 @@ def main():
         conn = psycopg.connect(**conn_params)
         drop_comments_table(conn)
         create_comments_table(conn)
-        ingest_comments(bucket_name, prefix, conn)
     finally:
         if conn:
             conn.close()
+
+    max_workers = 15
+    before = time.time()
+    ingest_comments(bucket_name, prefix, conn_params, max_workers)
+    after = time.time()
+    print(max_workers, after - before)
 
 if __name__ == '__main__':
     main()
