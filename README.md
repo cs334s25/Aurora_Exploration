@@ -36,10 +36,18 @@ The repo contains code to bulk ingest data from `s3://mirrulations` into the Aur
 * Add your IP address to the security group protecting the Aurora DB
 
   ```
-  ./add_ip.sh
+  python3 add_ip.py
+  ```
+
+## Cleanup
+
+To remove all developer IPs from the security group:
+  
+  ```
+  python3 remove_developer_ips.py
   ```
   
-   
+
 ## Ingest
 
 
