@@ -5,6 +5,8 @@ import json
 import time
 import psycopg
 from psycopg.errors import Error
+import boto3
+
 
 # Lock for database connection to ensure thread safety
 db_lock = threading.Lock()
@@ -162,13 +164,20 @@ def ingest_comments(directory, conn_params, max_workers):
         concurrent.futures.wait(futures)
 
 def main():
-    directory = '/data/data'
+
+    client = boto3.client('secretsmanager', region_name='us-east-1')
+    secret_name = "mirrulationsdb/postgres/master"
+    response = client.get_secret_value(SecretId=secret_name)
+    secret = json.loads(response['SecretString'])
+
+    username = secret['username']
+    password = secret['password']
 
     conn_params = {
         "dbname": "postgres",
-        "user": "your_username",
-        "password": "your_password",
-        "host": "your_database_host",
+        "user": username,
+        "password": password,
+        "host": "mirrulations.cluster-ro-cb6gssewgl8x.us-east-1.rds.amazonaws.com",
         "port": "5432"
     }
 
@@ -179,6 +188,8 @@ def main():
     finally:
         if conn:
             conn.close()
+
+    directory = '/data/data'
 
     max_workers = 15
     before = time.time()
