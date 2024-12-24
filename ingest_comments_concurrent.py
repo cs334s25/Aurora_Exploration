@@ -178,7 +178,7 @@ def main():
     prefix = 'WHD/'
 
     client = boto3.client('secretsmanager', region_name='us-east-1')
-    secret_name = "rds!cluster-60fb6e4d-4475-4da5-8fe1-945933b30166"
+    secret_name = "mirrulationsdb/postgres/master"
     response = client.get_secret_value(SecretId=secret_name)
     secret = json.loads(response['SecretString'])
 
