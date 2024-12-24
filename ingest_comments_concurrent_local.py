@@ -177,7 +177,7 @@ def main():
         "dbname": "postgres",
         "user": username,
         "password": password,
-        "host": "mirrulations.cluster-ro-cb6gssewgl8x.us-east-1.rds.amazonaws.com",
+        "host": "mirrulationsdb.cluster-ro-cb6gssewgl8x.us-east-1.rds.amazonaws.com",
         "port": "5432"
     }
 
